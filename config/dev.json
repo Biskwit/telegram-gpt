@@ -1,0 +1,14 @@
+{
+  "log": {
+    "level": "debug"
+  },
+  "openai": {
+    "apiKey": ""
+  },
+  "telegram": {
+    "apiKey": "",
+    "users": [
+      
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+	"compilerOptions": {
+		"lib": [
+			"es5",
+			"es6",
+			"esnext.asynciterable",
+			"dom"
+		],
+		"target": "es5",
+		"module": "commonjs",
+		"moduleResolution": "node",
+		"outDir": "./",
+		"emitDecoratorMetadata": true,
+		"experimentalDecorators": true,
+		"sourceMap": true,
+		"resolveJsonModule": true,
+		"esModuleInterop": true
+	},
+	"exclude": [
+		"./node_modules",
+		"./helm",
+		"./.vscode",
+		"./dist",
+	],
+	"include":[
+		".eslintrc.js",
+		"./src/**/*.ts"
+	]
+}
