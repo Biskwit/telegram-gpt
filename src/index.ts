@@ -3,81 +3,153 @@ import config from "config";
 import * as log4js from "log4js";
 import TelegramBot from "node-telegram-bot-api";
 
+import { loadJSON, saveJSON } from "./utils";
+
 import { ChatCompletionRequestMessage, Configuration, OpenAIApi } from "openai";
 
 const bot = new TelegramBot(config.get("telegram.apiKey"), { polling: true })
+const configuration = new Configuration({
+	apiKey: config.get("openai.apiKey"),
+});
+const openai = new OpenAIApi(configuration);
 
-const users: Array<number> = config.get("telegram.users")
+const users = loadJSON("./data/users.json")
+const conversations = () => {
+	let conv = []
+	for (const user of users) {
+		conv[user] = loadJSON(`./data/${user}.json`)
+	}
+	return conv
+}
+const admin: number = config.get("telegram.admin")
 
 const logger = log4js.getLogger(`server`)
 logger.level = config.get("log.level")
 
-const categories = { default: { appenders: ['everything'], level: 'info' } }
-categories[`lyrics-bot`] = {
-  appenders: ['everything'],
-  level: 'info'
+const categories = { default: { appenders: ['everything'], level: config.get("log.level") as string } }
+categories[`gpt-bot`] = {
+	appenders: ['everything'],
+	level: config.get("log.level")
 }
+
 log4js.configure({
-  appenders: {
-    everything: { type: 'stdout' }
-  },
-  categories: categories
+	appenders: {
+		everything: { type: 'stdout' }
+	},
+	categories: categories
 })
 
-let historic: ChatCompletionRequestMessage[] = [
-  {
-    role: "system",
-    content: `You are a helpful assistant.`
-  },
-]
 
 bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  if (msg.text == '/start') {
-    bot.sendMessage(users[0], `new user ${msg.from.id} (${msg.from.username ?? 'unknown'})`) // notify admin
-    return
-  }
-  logger.info(`${msg.reply_to_message?.text ?? 'no reply'} -> ${msg.text}`)
-  logger.info(`Received message from ${msg.from.id}`)
-  if (!users.includes(msg.from.id)) return
-  if (msg.text == '/reset') {
-    bot.sendMessage(chatId, `Resetting...`)
-    historic = [
-      {
-        role: "system",
-        content: `You are a helpful assistant.`
-      },
-    ]
-    return
-  } else {
-    try {
-      historic.push({
-        role: "user",
-        content: msg.text
-      })
-      const configuration = new Configuration({
-        apiKey: config.get("openai.apiKey"),
-      });
-      const openai = new OpenAIApi(configuration);
+	const chatId = msg.chat.id;
+	const isReply = msg.reply_to_message != undefined
 
-      const response = await openai.createChatCompletion({
-        model: "gpt-3.5-turbo",
-        messages: historic,
-        stream: false,
-        temperature: 0.4,
-        max_tokens: 2048
-      });
-      bot.sendMessage(chatId, response.data.choices[0].message.content, { parse_mode: "Markdown" });
-      historic.push({
-        role: "assistant",
-        content: response.data.choices[0].message.content
-      })
-    } catch (error) {
-      logger.error(error)
-    }
-  }
+	if (msg.text.startsWith('/start')) {
+		bot.sendMessage(users[0], `new user ${msg.from.id} (${msg.from.username ?? 'unknown'})`) // notify admin
+		return
+	}
 
+	if (msg.text.startsWith('/add')) {
+		const userToAdd = parseInt(msg.text.split(' ')[1])
+		if (users.includes(userToAdd)) return
+		if (msg.from.id != admin) return
+		users.push(userToAdd)
+		saveJSON("./data/users.json", users)
+		bot.sendMessage(admin, `Added user ${userToAdd}`)
+		bot.sendMessage(userToAdd, `You are now authorized to use the bot.`)
+		return
+	}
+
+	logger.info(`Received message from ${msg.from.id}`)
+
+	if (!users.includes(msg.from.id)) return
+
+	let userConversation = conversations()[msg.from.id]
+	try {
+		if (isReply) {
+			// it's a reply, so we need to find the thread
+			userConversation.push({
+				role: "user",
+				content: msg.text,
+				id: msg.message_id,
+				replyTo: msg.reply_to_message.message_id
+			})
+
+			const thread = getThread(userConversation, msg.reply_to_message.message_id).map(msg => {
+				return {
+					role: msg.role,
+					content: msg.content
+				}
+			})
+
+			const response = await openai.createChatCompletion({
+				model: "gpt-3.5-turbo",
+				messages: [...thread, {
+					role: "user",
+					content: msg.text,
+				}],
+				stream: false,
+				temperature: 0.5,
+				max_tokens: 2048
+			});
+
+			const replyMsg = await bot.sendMessage(chatId, response.data.choices[0].message.content, { parse_mode: "Markdown", reply_to_message_id: msg.message_id });
+			userConversation.push({
+				role: "assistant",
+				content: response.data.choices[0].message.content,
+				id: replyMsg.message_id,
+				replyTo: msg.message_id
+			})
+			saveJSON(`./data/${msg.from.id}.json`, userConversation)
+		} else {
+			// new topic
+			userConversation.push({
+				role: "system",
+				content: msg.text,
+				id: msg.message_id,
+				replyTo: null
+			})
+			const response = await openai.createChatCompletion({
+				model: "gpt-3.5-turbo",
+				messages: [
+					{
+						role: "system",
+						content: msg.text
+					}
+				],
+				stream: false,
+				temperature: 0.5,
+				max_tokens: 2048
+			});
+
+			const replyMsg = await bot.sendMessage(chatId, response.data.choices[0].message.content, { parse_mode: "Markdown", reply_to_message_id: msg.message_id });
+			userConversation.push({
+				role: "assistant",
+				content: response.data.choices[0].message.content,
+				id: replyMsg.message_id,
+				replyTo: msg.message_id
+			})
+			saveJSON(`./data/${msg.from.id}.json`, userConversation)
+		}
+	} catch (error) {
+		logger.error(error)
+	}
 });
+
+function getThread(userConversation, id) {
+	const thread = [];
+	let currentId = id;
+
+	while (currentId) {
+		const message = userConversation.find(msg => msg.id === currentId);
+		if (!message) break;
+
+		thread.unshift(message);
+		currentId = message.replyTo;
+	}
+
+	return thread;
+}
 
 
 // const stream = resStream.data as any as Readable;

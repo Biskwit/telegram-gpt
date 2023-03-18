@@ -7,8 +7,6 @@
   },
   "telegram": {
     "apiKey": "",
-    "users": [
-      
-    ]
+    "admin": 123
   }
 }
