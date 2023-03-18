@@ -43,96 +43,97 @@ log4js.configure({
 bot.on('message', async (msg) => {
 	const chatId = msg.chat.id;
 	const isReply = msg.reply_to_message != undefined
+	const isCommand = msg.text.startsWith('/')
 
-	if (msg.text.startsWith('/start')) {
-		bot.sendMessage(users[0], `new user ${msg.from.id} (${msg.from.username ?? 'unknown'})`) // notify admin
-		return
-	}
+	if (isCommand) {
+		if (msg.text.startsWith('/start')) {
+			bot.sendMessage(users[0], `new user ${msg.from.id} (${msg.from.username ?? 'unknown'})`) // notify admin
+			return
+		}
 
-	if (msg.text.startsWith('/add')) {
-		const userToAdd = parseInt(msg.text.split(' ')[1])
-		if (users.includes(userToAdd)) return
-		if (msg.from.id != admin) return
-		users.push(userToAdd)
-		saveJSON("./data/users.json", users)
-		bot.sendMessage(admin, `Added user ${userToAdd}`)
-		bot.sendMessage(userToAdd, `You are now authorized to use the bot.`)
-		return
-	}
-
-	logger.info(`Received message from ${msg.from.id}`)
-
-	if (!users.includes(msg.from.id)) return
-
-	let userConversation = conversations()[msg.from.id]
-	try {
-		if (isReply) {
-			// it's a reply, so we need to find the thread
-			userConversation.push({
-				role: "user",
-				content: msg.text,
-				id: msg.message_id,
-				replyTo: msg.reply_to_message.message_id
-			})
-
-			const thread = getThread(userConversation, msg.reply_to_message.message_id).map(msg => {
-				return {
-					role: msg.role,
-					content: msg.content
-				}
-			})
-
-			const response = await openai.createChatCompletion({
-				model: "gpt-3.5-turbo",
-				messages: [...thread, {
+		if (msg.text.startsWith('/add')) {
+			const userToAdd = parseInt(msg.text.split(' ')[1])
+			if (users.includes(userToAdd)) return
+			if (msg.from.id != admin) return
+			users.push(userToAdd)
+			saveJSON("./data/users.json", users)
+			bot.sendMessage(admin, `Added user ${userToAdd}`)
+			bot.sendMessage(userToAdd, `You are now authorized to use the bot.`)
+			return
+		}
+	} else {
+		logger.info(`Received message from ${msg.from.id}`)
+		if (!users.includes(msg.from.id)) return
+		let userConversation = conversations()[msg.from.id]
+		try {
+			if (isReply) {
+				// it's a reply, so we need to find the thread
+				userConversation.push({
 					role: "user",
 					content: msg.text,
-				}],
-				stream: false,
-				temperature: 0.5,
-				max_tokens: 2048
-			});
-
-			const replyMsg = await bot.sendMessage(chatId, response.data.choices[0].message.content, { parse_mode: "Markdown", reply_to_message_id: msg.message_id });
-			userConversation.push({
-				role: "assistant",
-				content: response.data.choices[0].message.content,
-				id: replyMsg.message_id,
-				replyTo: msg.message_id
-			})
-			saveJSON(`./data/${msg.from.id}.json`, userConversation)
-		} else {
-			// new topic
-			userConversation.push({
-				role: "system",
-				content: msg.text,
-				id: msg.message_id,
-				replyTo: null
-			})
-			const response = await openai.createChatCompletion({
-				model: "gpt-3.5-turbo",
-				messages: [
-					{
-						role: "system",
-						content: msg.text
+					id: msg.message_id,
+					replyTo: msg.reply_to_message.message_id
+				})
+	
+				const thread = getThread(userConversation, msg.reply_to_message.message_id).map(msg => {
+					return {
+						role: msg.role,
+						content: msg.content
 					}
-				],
-				stream: false,
-				temperature: 0.5,
-				max_tokens: 2048
-			});
-
-			const replyMsg = await bot.sendMessage(chatId, response.data.choices[0].message.content, { parse_mode: "Markdown", reply_to_message_id: msg.message_id });
-			userConversation.push({
-				role: "assistant",
-				content: response.data.choices[0].message.content,
-				id: replyMsg.message_id,
-				replyTo: msg.message_id
-			})
-			saveJSON(`./data/${msg.from.id}.json`, userConversation)
+				})
+	
+				const response = await openai.createChatCompletion({
+					model: "gpt-3.5-turbo",
+					messages: [...thread, {
+						role: "user",
+						content: msg.text,
+					}],
+					stream: false,
+					temperature: 0.5,
+					max_tokens: 2048
+				});
+	
+				const replyMsg = await bot.sendMessage(chatId, response.data.choices[0].message.content, { parse_mode: "Markdown", reply_to_message_id: msg.message_id });
+				userConversation.push({
+					role: "assistant",
+					content: response.data.choices[0].message.content,
+					id: replyMsg.message_id,
+					replyTo: msg.message_id
+				})
+				saveJSON(`./data/${msg.from.id}.json`, userConversation)
+			} else {
+				// new topic
+				userConversation.push({
+					role: "system",
+					content: msg.text,
+					id: msg.message_id,
+					replyTo: null
+				})
+				const response = await openai.createChatCompletion({
+					model: "gpt-3.5-turbo",
+					messages: [
+						{
+							role: "system",
+							content: msg.text
+						}
+					],
+					stream: false,
+					temperature: 0.5,
+					max_tokens: 2048
+				});
+	
+				const replyMsg = await bot.sendMessage(chatId, response.data.choices[0].message.content, { parse_mode: "Markdown", reply_to_message_id: msg.message_id });
+				userConversation.push({
+					role: "assistant",
+					content: response.data.choices[0].message.content,
+					id: replyMsg.message_id,
+					replyTo: msg.message_id
+				})
+				saveJSON(`./data/${msg.from.id}.json`, userConversation)
+			}
+		} catch (error) {
+			logger.error(error)
 		}
-	} catch (error) {
-		logger.error(error)
 	}
 });
 
